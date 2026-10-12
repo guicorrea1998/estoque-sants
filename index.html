@@ -242,6 +242,7 @@ button{font-family:inherit;cursor:pointer;border:none}
 @media print{
   body{background:#fff;padding:0}
   .top,.nav,.no-print,.modal-top,.sec-tit,.padwrap,.btn-linha,.btn{display:none!important}
+  #app,#login{display:none!important}
   .modal{position:static;background:#fff;overflow:visible}
   .wrap{padding:0;max-width:none}
   .doc{border:none;border-radius:0;padding:0;font-size:10.5px;margin:0}
@@ -744,7 +745,7 @@ function telaDocPronto(){
       <h2>Documento nº ${d.num}</h2>
     </div>
     <div class="wrap">
-      ${semAss ? `<div class="meta" style="margin-bottom:11px;line-height:1.5;
+      ${semAss ? `<div class="meta no-print" style="margin-bottom:11px;line-height:1.5;
         background:var(--warn-soft);color:var(--warn);padding:11px 13px;border-radius:var(--r-sm)">
         Documento gerado <b>sem assinatura</b>. O cliente assina à mão no campo em branco.</div>` : ''}
       <div id="area-doc">${montarDoc()}</div>
