@@ -315,6 +315,7 @@ let UID = null;
 const colProdutos = () => collection(fs, 'usuarios', UID, 'produtos');
 const docProduto  = id => doc(fs, 'usuarios', UID, 'produtos', id);
 const docConfig   = () => doc(fs, 'usuarios', UID);
+const colAnuncios = () => collection(fs, 'usuarios', UID, 'anuncios');
 
 // Preenchido pelo próprio vendedor em Ajustes; entra nos documentos.
 let EMPRESA = { nome:'', cnpj:'', resp:'', respCpf:'', end:'', cidade:'' };
@@ -324,6 +325,22 @@ let EMPRESA = { nome:'', cnpj:'', resp:'', respCpf:'', end:'', cidade:'' };
    ═══════════════════════════════════════════════════ */
 let aparelhos = [];     // {id, nome, cat, custo, pedido, imei, descricao, fotos[], status, criadoEm, venda}
 let nomesSalvos = [];
+let anuncios = [];      // um doc por dia, gravado pelo robô: {data, gasto, conversas, impressoes, cliques, plataforma}
+let periodoAds = '30';  // '30' = últimos 30 dias · 'mes' = este mês · 'tudo'
+
+const ORIGENS = {
+  anuncio:   'Anúncio Facebook/Insta',
+  google:    'Anúncio do Google',
+  indicacao: 'Indicação',
+  organico:  'Instagram / Status (sem anúncio)',
+  cliente:   'Já era cliente',
+  outro:     'Outro',
+};
+const ORIGENS_PAGAS = ['anuncio','google'];
+function opcoesOrigem(sel){
+  return `<option value="">Não informado</option>` +
+    Object.entries(ORIGENS).map(([k,t]) => `<option value="${k}" ${sel===k?'selected':''}>${t}</option>`).join('');
+}
 let telaAtual = 'painel';
 let editandoId = null;
 let online = true;
@@ -370,6 +387,15 @@ function iniciarDb(){
       render();
     },
     err => { console.warn('firestore:', err.code); online = false; render(); }
+  );
+  // Dados de anúncio: só leitura, quem grava é o robô diário (GitHub Actions).
+  onSnapshot(colAnuncios(),
+    snap => {
+      anuncios = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+        .filter(x => x.data).sort((a,b) => a.data.localeCompare(b.data));
+      render();
+    },
+    err => console.warn('anuncios:', err.code)
   );
 }
 
@@ -1144,7 +1170,66 @@ function telaPainel(){
       <div class="k">Lucro das vendas</div>
       <div class="v" style="color:${lucro>=0?'var(--ok)':'var(--dang)'}">${money(lucro)}</div>
       <div class="meta" style="margin-top:5px">Faturamento menos o custo dos aparelhos vendidos.</div>
-    </div>`;
+    </div>
+    ${blocoAnuncios()}`;
+}
+
+/* ── Anúncios (dados do robô + origem das vendas) ─── */
+function inicioPeriodo(){
+  if(periodoAds === 'tudo') return '0000-00-00';
+  if(periodoAds === 'mes') return hoje().slice(0,8) + '01';
+  return somaDias(hoje(), -29);
+}
+window.setPeriodoAds = p => { periodoAds = p; render(); };
+
+function blocoAnuncios(){
+  const ini = inicioPeriodo();
+  const dias = anuncios.filter(x => x.data >= ini);
+  const gasto = dias.reduce((s,x) => s + (Number(x.gasto)||0), 0);
+  const conversas = dias.reduce((s,x) => s + (Number(x.conversas)||0), 0);
+  const vendAds = aparelhos.filter(a => a.status === 'vendido' &&
+    ORIGENS_PAGAS.includes(a.venda?.origem) && (a.venda?.data||'') >= ini);
+  const fatAds = vendAds.reduce((s,a) => s + (a.venda?.valor||0), 0);
+  const lucroAds = vendAds.reduce((s,a) => s + (a.venda?.valor||0) - (a.custo||0), 0);
+  const semOrigem = aparelhos.filter(a => a.status === 'vendido' && !a.venda?.origem
+    && (a.venda?.data||'') >= ini).length;
+  const ultimo = anuncios.length ? anuncios[anuncios.length-1] : null;
+  const seg = (k,t) => `<button class="${periodoAds===k?'on':''}" onclick="setPeriodoAds('${k}')">${t}</button>`;
+
+  if(!anuncios.length && !vendAds.length) return `
+    <div class="sec-tit">Anúncios</div>
+    <div class="card" style="font-size:13px;line-height:1.5;color:var(--muted)">
+      Ainda não há dados de anúncio. Quando a conta de anúncios estiver conectada,
+      o gasto e as conversas aparecem aqui todo dia. Nas vendas, marque
+      <b>“De onde veio o cliente?”</b> para ver o retorno.</div>`;
+
+  const retorno = gasto ? lucroAds / gasto : 0;
+  return `
+    <div class="sec-tit">Anúncios</div>
+    <div class="seg" style="margin-bottom:11px">${seg('30','30 dias')}${seg('mes','Este mês')}${seg('tudo','Tudo')}</div>
+    <div class="grid">
+      <div class="stat"><div class="k">Investido</div><div class="v sm">${money(gasto)}</div></div>
+      <div class="stat"><div class="k">Conversas</div><div class="v sm">${conversas}</div>
+        <div class="meta" style="margin-top:3px">${conversas ? money(gasto/conversas)+' cada' : '—'}</div></div>
+    </div>
+    <div class="grid">
+      <div class="stat"><div class="k">Vendas do anúncio</div><div class="v sm">${vendAds.length}</div>
+        <div class="meta" style="margin-top:3px">${money(fatAds)}${vendAds.length && gasto ? ' · '+money(gasto/vendAds.length)+' por venda' : ''}</div></div>
+      <div class="stat"><div class="k">Lucro do anúncio</div>
+        <div class="v sm" style="color:${lucroAds-gasto>=0?'var(--ok)':'var(--dang)'}">${money(lucroAds - gasto)}</div>
+        <div class="meta" style="margin-top:3px">já descontado o anúncio</div></div>
+    </div>
+    ${gasto && vendAds.length ? `<div class="stat" style="margin-bottom:11px">
+      <div class="k">Retorno</div>
+      <div class="v" style="color:var(--ok)">${retorno.toLocaleString('pt-BR',{maximumFractionDigits:1})}x</div>
+      <div class="meta" style="margin-top:5px">Cada R$ 1 em anúncio virou ${money(retorno)} de lucro nos aparelhos.</div>
+    </div>` : ''}
+    ${conversas && vendAds.length ? `<div class="meta" style="margin:-2px 0 9px">
+      ${Math.round(vendAds.length/conversas*100)}% das conversas viraram venda.</div>` : ''}
+    ${semOrigem ? `<div class="card tap" onclick="irPara('vendas')" style="background:var(--warn-soft);border-color:transparent">
+      <div style="font-size:13px;color:var(--warn);line-height:1.5">
+      ${semOrigem} venda(s) sem origem neste período. Abra a venda e escolha de onde veio o cliente.</div></div>` : ''}
+    <div class="meta">${ultimo ? 'Dados de anúncio atualizados até '+dataBR(ultimo.data)+'.' : 'Conta de anúncios ainda não conectada.'}</div>`;
 }
 
 /* ═══════════════════════════════════════════════════
@@ -1333,6 +1418,11 @@ function detalheVenda(a, v){
         <b>${money(v.troca.valor)}</b></div>` : ''}
       <div class="row" style="margin-top:7px"><span class="meta">Lucro</span>
         <b style="color:${lucro>=0?'var(--ok)':'var(--dang)'}">${money(lucro)}</b></div>
+      <div class="row" style="margin-top:7px;gap:10px"><span class="meta" style="flex-shrink:0">Origem</span>
+        <select onchange="alterarOrigem('${a.id}', this.value)"
+          style="max-width:62%;font:inherit;font-weight:600;border:1px solid var(--line, #ddd);
+          border-radius:8px;padding:5px 7px;background:var(--surface-2, #f4f4f6);color:inherit">
+          ${opcoesOrigem(v.origem||'')}</select></div>
     </div>
     ${v.cliente?.nome ? `
       <div class="sec-tit">Cliente</div>
@@ -1382,6 +1472,12 @@ function detalheVenda(a, v){
     <button class="btn sec" style="margin-top:12px" onclick="desfazerVenda('${a.id}')">
       Desfazer venda (volta ao estoque)</button>`;
 }
+
+window.alterarOrigem = async (id, origem) => {
+  const a = aparelhos.find(x => x.id === id);
+  if(!a?.venda) return;
+  await salvarAparelho({ ...a, venda:{ ...a.venda, origem } }, id);
+};
 
 window.concluirVenda = async id => {
   const a = aparelhos.find(x => x.id === id);
@@ -1477,6 +1573,10 @@ window.abrirVenda = id => {
       </div>
       <div class="meta" style="margin:-4px 0 13px">Se preencher o valor, o aparelho entra no estoque com esse custo.</div>
 
+      <div class="sec-tit">De onde veio o cliente?</div>
+      <div class="fld"><select id="v-origem">${opcoesOrigem('')}</select></div>
+      <div class="meta" style="margin:-4px 0 13px">Com isso o painel mostra quanto o anúncio deu de retorno.</div>
+
       <div class="sec-tit">Cliente</div>
       <div class="fld"><label>Nome</label><input id="v-cnome" placeholder="Nome completo"></div>
       <div class="dupla">
@@ -1535,6 +1635,7 @@ window.gravarVenda = async id => {
     valor,
     data: document.getElementById('v-data').value || hoje(),
     forma: formaSel,
+    origem: document.getElementById('v-origem').value || '',
     cliente,
     troca: trocaVal ? {
       valor: trocaVal, modelo: trocaMod,
