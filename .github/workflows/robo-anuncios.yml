@@ -1,0 +1,30 @@
+name: Robô de anúncios (Meta)
+
+on:
+  schedule:
+    - cron: '17 9 * * *'   # todo dia às 6h17 (horário de Brasília)
+  workflow_dispatch:
+    inputs:
+      dias:
+        description: 'Quantos dias buscar (use 365 na primeira vez para trazer o histórico)'
+        default: '7'
+
+permissions:
+  contents: read
+
+jobs:
+  buscar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-save --no-audit --no-fund firebase-admin@12
+      - run: node robo/meta-anuncios.mjs
+        env:
+          META_TOKEN: ${{ secrets.META_TOKEN }}
+          FIREBASE_SA: ${{ secrets.FIREBASE_SA }}
+          CONTAS: ${{ secrets.CONTAS }}
+          DIAS: ${{ github.event.inputs.dias || '7' }}
