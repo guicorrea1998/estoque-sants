@@ -325,6 +325,7 @@ let EMPRESA = { nome:'', cnpj:'', resp:'', respCpf:'', end:'', cidade:'' };
    ═══════════════════════════════════════════════════ */
 let aparelhos = [];     // {id, nome, cat, custo, pedido, imei, descricao, fotos[], status, criadoEm, venda}
 let nomesSalvos = [];
+let contaAds = null;    // situação da conta de anúncios (saldo), gravada pelo robô
 let anuncios = [];      // um doc por dia, gravado pelo robô: {data, gasto, conversas, impressoes, cliques, plataforma}
 let periodoAds = '30';  // '30' = últimos 30 dias · 'mes' = este mês · 'tudo'
 
@@ -396,6 +397,10 @@ function iniciarDb(){
       render();
     },
     err => console.warn('anuncios:', err.code)
+  );
+  onSnapshot(doc(fs, 'usuarios', UID, 'meta', 'anuncios'),
+    d => { contaAds = d.exists() ? d.data() : null; render(); },
+    err => console.warn('conta de anúncios:', err.code)
   );
 }
 
@@ -1196,7 +1201,7 @@ function blocoAnuncios(){
   const ultimo = anuncios.length ? anuncios[anuncios.length-1] : null;
   const seg = (k,t) => `<button class="${periodoAds===k?'on':''}" onclick="setPeriodoAds('${k}')">${t}</button>`;
 
-  if(!anuncios.length && !vendAds.length) return `
+  if(!anuncios.length && !vendAds.length && !contaAds) return `
     <div class="sec-tit">Anúncios</div>
     <div class="card" style="font-size:13px;line-height:1.5;color:var(--muted)">
       Ainda não há dados de anúncio. Quando a conta de anúncios estiver conectada,
@@ -1206,6 +1211,7 @@ function blocoAnuncios(){
   const retorno = gasto ? lucroAds / gasto : 0;
   return `
     <div class="sec-tit">Anúncios</div>
+    ${blocoSaldo()}
     <div class="seg" style="margin-bottom:11px">${seg('30','30 dias')}${seg('mes','Este mês')}${seg('tudo','Tudo')}</div>
     <div class="grid">
       <div class="stat"><div class="k">Investido</div><div class="v sm">${money(gasto)}</div></div>
@@ -1230,6 +1236,34 @@ function blocoAnuncios(){
       <div style="font-size:13px;color:var(--warn);line-height:1.5">
       ${semOrigem} venda(s) sem origem neste período. Abra a venda e escolha de onde veio o cliente.</div></div>` : ''}
     <div class="meta">${ultimo ? 'Dados de anúncio atualizados até '+dataBR(ultimo.data)+'.' : 'Conta de anúncios ainda não conectada.'}</div>`;
+}
+
+// Saldo da conta de anúncios e para quantos dias ele dá, pela média dos últimos 7 dias.
+function blocoSaldo(){
+  const c = contaAds; if(!c) return '';
+  const ult7 = anuncios.filter(x => x.data >= somaDias(hoje(), -6));
+  const media = ult7.reduce((s,x) => s + (Number(x.gasto)||0), 0) / 7;
+  const quando = c.atualizadoEm ? new Date(c.atualizadoEm).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+  const pausada = c.status && c.status !== 1;
+  if(c.tipo === 'pre'){
+    const saldo = Number(c.saldo)||0;
+    const dias = media > 0 ? Math.floor(saldo / media) : null;
+    const baixo = saldo <= 0 || (dias !== null && dias <= 2);
+    return `<div class="stat" style="margin-bottom:11px;${baixo?'background:var(--warn-soft);border-color:transparent':''}">
+      <div class="k">Saldo na conta de anúncios</div>
+      <div class="v" style="color:${saldo<=0?'var(--dang)':baixo?'var(--warn)':'var(--ok)'}">${c.saldo===null||c.saldo===undefined?'—':money(saldo)}</div>
+      <div class="meta" style="margin-top:5px">${saldo<=0 ? 'Sem saldo: os anúncios estão parados. Coloque saldo por Pix para voltar.'
+        : dias!==null ? `Dá para cerca de ${dias} dia${dias===1?'':'s'} no ritmo atual (${money(media)} por dia).${baixo?' Hora de colocar saldo.':''}`
+        : 'Sem gasto nos últimos 7 dias.'}</div>
+      ${pausada ? '<div class="meta" style="margin-top:5px;color:var(--dang)">A conta está com alguma pendência no Meta. Confira no Gerenciador de Anúncios.</div>' : ''}
+      <div class="meta" style="margin-top:5px">Atualizado em ${quando}.</div></div>`;
+  }
+  return `<div class="stat" style="margin-bottom:11px">
+    <div class="k">A pagar na conta de anúncios (cartão)</div>
+    <div class="v sm">${money(c.aPagar)}</div>
+    ${c.limite ? `<div class="meta" style="margin-top:5px">Limite de gasto: ${money(c.limite)} · já gasto ${money(c.gastoTotal)}</div>` : ''}
+    ${pausada ? '<div class="meta" style="margin-top:5px;color:var(--dang)">A conta está com alguma pendência no Meta. Confira no Gerenciador de Anúncios.</div>' : ''}
+    <div class="meta" style="margin-top:5px">Atualizado em ${quando}.</div></div>`;
 }
 
 /* ═══════════════════════════════════════════════════
