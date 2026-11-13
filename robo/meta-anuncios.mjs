@@ -8,6 +8,8 @@
 //
 // Grava em usuarios/{uid}/anuncios/{AAAA-MM-DD}:
 //   { data, plataforma:'meta', gasto, conversas, impressoes, cliques, atualizadoEm }
+// e em usuarios/{uid}/meta/anuncios (situação da conta):
+//   { saldo, saldoTexto, tipo:'pre'|'pos', aPagar, gastoTotal, limite, status, atualizadoEm }
 
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -61,6 +63,46 @@ async function lerInsights(conta, token) {
   return linhas;
 }
 
+// "Saldo disponível (R$ 45,30 BRL)" ou "Available balance (R$45.30 BRL)" -> 45.3
+function lerValor(texto) {
+  const m = String(texto || '').match(/(?:R\$|BRL)\s*([\d.,]+)/) || String(texto || '').match(/([\d][\d.,]*)/);
+  if (!m) return null;
+  let n = m[1];
+  const ult = Math.max(n.lastIndexOf(','), n.lastIndexOf('.'));
+  if (ult >= 0 && n.length - ult - 1 === 2) n = n.slice(0, ult).replace(/[.,]/g, '') + '.' + n.slice(ult + 1);
+  else n = n.replace(/[.,]/g, '');
+  const v = Number(n);
+  return Number.isFinite(v) ? v : null;
+}
+
+// Situação da conta: saldo pré-pago (Pix/boleto) ou valor a pagar (cartão).
+async function lerConta(conta, token) {
+  const id = String(conta).startsWith('act_') ? conta : `act_${conta}`;
+  const campos = 'name,currency,account_status,amount_spent,balance,spend_cap,funding_source_details';
+  const r = await fetch(`https://graph.facebook.com/${VERSAO}/${id}?fields=${campos}`, { headers: { Authorization: `Bearer ${token}` } });
+  const c = await r.json();
+  if (!r.ok || c.error) { const e = c.error || {}; throw new Error(`Meta respondeu ${r.status}: ${e.message || 'erro'} (código ${e.code ?? '?'})`); }
+  return converterConta(c);
+}
+
+function converterConta(c) {
+  const fonte = c.funding_source_details || {};
+  const texto = fonte.display_string || '';
+  const pre = fonte.type === 20 || /dispon|available|pré-pago|prepaid/i.test(texto);
+  const cent = v => (v === undefined || v === null || v === '' ? null : Math.round(Number(v)) / 100);
+  const limite = cent(c.spend_cap);
+  return {
+    tipo: pre ? 'pre' : 'pos',
+    saldo: pre ? lerValor(texto) : null,
+    saldoTexto: texto,
+    aPagar: pre ? null : cent(c.balance),
+    gastoTotal: cent(c.amount_spent),
+    limite: limite || null,
+    status: Number(c.account_status) || null,   // 1 ativa, 2 desativada, 3 pagamento pendente...
+    moeda: c.currency || 'BRL',
+  };
+}
+
 function converter(l) {
   const acoes = l.actions || [];
   const conversas = acoes
@@ -111,6 +153,10 @@ async function main() {
           { ...dia, atualizadoEm: new Date().toISOString() }, { merge: true });
       }
       await lote.commit();
+      const situacao = SIMULAR ? converterConta({ funding_source_details: { type: 20, display_string: 'Saldo disponível (R$ 45,30 BRL)' }, amount_spent: '123456', account_status: 1, currency: 'BRL' })
+        : await lerConta(conta, token);
+      await db.doc(`usuarios/${uid}/meta/anuncios`).set({ ...situacao, atualizadoEm: new Date().toISOString() });
+      console.log(`  saldo: ${situacao.tipo === 'pre' ? 'R$ ' + (situacao.saldo ?? '?') : 'a pagar R$ ' + (situacao.aPagar ?? '?')}`);
       const gasto = linhas.reduce((s, l) => s + (Number(l.spend) || 0), 0);
       console.log(`✓ ${rotulo}: ${linhas.length} dia(s) com gasto gravados (R$ ${gasto.toFixed(2)} nos últimos ${DIAS} dias).`);
     } catch (e) {
@@ -121,5 +167,5 @@ async function main() {
   if (falhas) process.exit(1);
 }
 
-export { lerInsights, converter, periodo };
+export { lerInsights, converter, periodo, lerValor, converterConta };
 if (import.meta.url === `file://${process.argv[1]}`) main();
