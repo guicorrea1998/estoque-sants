@@ -2,7 +2,7 @@ name: Robô de anúncios (Meta)
 
 on:
   schedule:
-    - cron: '17 9 * * *'   # todo dia às 6h17 (horário de Brasília)
+    - cron: '17 9-23/3,2 * * *'   # a cada 3 horas, das 6h17 às 23h17 (horário de Brasília)
   workflow_dispatch:
     inputs:
       dias:
